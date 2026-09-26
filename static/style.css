@@ -334,6 +334,15 @@ tr.row-added td:first-child { border-left: 4px solid var(--added-border); }
 tr.row-deleted { background: var(--deleted-bg); }
 tr.row-deleted td:first-child { border-left: 4px solid var(--deleted-border); }
 
+/* 字幕阅读负载审查 */
+.chip-overdue { background: var(--manual-bg); border-color: var(--manual-border); }
+.col-rd-status { width: 76px; }
+.col-rd-ms { width: 90px; text-align: right; }
+.col-rd-text { min-width: 200px; }
+.badge-overdue { background: var(--manual-border); color: #fff; }
+tr.row-overdue { background: var(--manual-bg); }
+tr.row-overdue td:first-child { border-left: 4px solid var(--manual-border); }
+
 .hidden { display: none; }
 
 /* 剪辑字幕重建 */

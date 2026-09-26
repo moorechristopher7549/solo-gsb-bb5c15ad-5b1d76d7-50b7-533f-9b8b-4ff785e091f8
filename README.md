@@ -55,6 +55,14 @@
 相同的区间、跳过无字幕区间，导出按时间**从 1 编号的无重叠 SRT**。页面预览
 重建后时间码、原块序位与正文；非法剪辑清单**指出项号并禁止导出**。
 
+另有 **字幕阅读负载审查** 工具：输入 SRT 与阅读速度（每秒 **4～30** 个显示
+宽度单位），每块正文**去空白后按东亚宽字符计 2、其余计 1** 折算所需阅读
+毫秒数（**向上取整**）；所有块放到**同一阅读时间轴**上按**最早出点优先**
+模拟分配（同出点按解析序位，入点/出点/块读完时更新，同一时刻只读一块，
+只允许在自身 [入点, 出点) 内阅读）；块到出点未读完即**逾期**并记录
+**未分配毫秒数**。页面按时间预览各块所需/已分配时长与合格/逾期，
+汇总逾期数并可下载 UTF-8 CSV；入点不早于出点的块会**指出块号并清空旧结果**。
+
 后端 Python + FastAPI，前端原生 HTML / CSS / JavaScript（无框架、无构建步骤）。
 
 ---
@@ -396,6 +404,40 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 ---
 
+## 字幕阅读负载审查
+
+启动后浏览器打开 **http://localhost:8000**（Docker Compose 一键启动见上文，
+端口可改，如 `APP_PORT=9000 docker compose up -d --build` 后访问
+http://localhost:9000 ），页面顶部切换到「**字幕阅读负载审查**」选项卡，
+可评估观众在给定阅读速度下是否来得及读完每块字幕：
+
+1. 文本框粘贴标准 **SRT**（与其它工具同一解析器，保留序号、时间码与正文）。
+2. 设置「**阅读速度**」（整数，**4～30**，默认 15：每秒可读的显示宽度
+   单位数）。
+3. 点 **开始审查**，下方表格**按时间**逐块预览：**状态**（合格 / 逾期）、
+   块号、原序号、时间码、**所需 / 已分配 / 未分配毫秒**与正文。
+4. 汇总区显示合格/逾期块数、字幕块数、阅读速度与未分配合计毫秒数；
+   点 **下载 CSV** 导出全部结果（UTF-8 带 BOM，Excel 直接打开不乱码）。
+
+### 审查规则
+
+- **所需阅读时长**：每块正文**去掉全部空白**后计显示宽度——
+  **东亚宽字符**（East Asian Width W/F，如中日韩文字、全角标点）计 **2**，
+  其余字符计 **1**；所需阅读毫秒数 = ⌈宽度 × 1000 ÷ 阅读速度⌉（**向上取整**）。
+- **阅读窗口**：每块只允许在**自身 [入点, 出点)** 内被阅读；
+  **入点不早于出点**的块返回 **400** 并**指出块号**，预览与导出同样被拒绝，
+  页面会**清空旧结果**。
+- **同一时间轴分配**：所有块共用一条阅读时间轴，**同一时刻只读一块**；
+  按**最早出点优先**分配，**出点相同按解析序位**；在**入点、出点或块读完时**
+  重新评估当前阅读的块——后到但出点更早的块会**抢占**当前块，
+  被抢占块已读进度保留，之后可继续。
+- **逾期**：块到出点仍未读完即逾期，**未分配毫秒数** = 所需 − 已分配，
+  在结果表与 CSV 中单列；汇总区统计逾期块数与未分配合计。
+
+错误信息示例：`阅读负载审查失败：第 2 块入点不早于出点（00:00:02,000 --> 00:00:02,000），无法在自身区间内安排阅读`
+
+---
+
 ## 人工锚点（强制配对）
 
 自动对齐在个别位置不符合预期时，可人工指定若干锚点把确定对应的两行强行配对：
@@ -479,6 +521,8 @@ curl -s -X POST http://localhost:8000/api/align \
 | POST | `/api/diff.csv` | 同入参，直接下载差异结果 CSV（UTF-8 带 BOM） |
 | POST | `/api/rebuild` | 入参 `{"srt","clips"}`，返回剪辑字幕重建预览 `summary` 与逐条 `rows` |
 | POST | `/api/rebuild.srt` | 同入参，直接下载重建后的 SRT（按时间从 1 编号、互不重叠） |
+| POST | `/api/readload` | 入参 `{"srt","speed"?}`，返回阅读负载审查预览 `summary` 与逐块 `rows` |
+| POST | `/api/readload.csv` | 同入参，直接下载阅读负载审查结果 CSV（UTF-8 带 BOM） |
 
 `anchors` 为可选的人工锚点数组：`[{"script": 3, "srt": 3}, {"script": 10, "srt": 8}]`，
 元素为解析后 1 起始的「对白稿行序位 / SRT 块序位」，两列须严格递增，
@@ -605,6 +649,25 @@ curl -s -X POST http://localhost:8000/api/rebuild \
        "clips":[{"source_in":1000,"source_out":3000,"target_in":0}]}'
 ```
 
+阅读负载审查接口 `/api/readload` 与 `/api/readload.csv` 的入参均为
+`{"srt": "...", "speed": 15}`：`speed` 为阅读速度（每秒可读的显示宽度
+单位数，整数 **4～30**，可省略，默认 15；越界返回 400）。预览 `rows`
+每块字段：`block_pos`（块号，解析序位）、`index`（声明序号）、
+`start_tc` / `end_tc`、`text`、`width`（去空白后的显示宽度）、
+`required_ms`（所需阅读毫秒，向上取整）、`allocated_ms`（时间轴上实际
+分到的阅读毫秒）、`unallocated_ms`（未分配毫秒，逾期块 > 0）、
+`status`（`ok` 合格 / `overdue` 逾期）；行按时间（入点、再按解析序位）
+排列。`summary` 含 `total`、`speed`、`ok`、`overdue`（逾期块数）与
+`required_ms` / `allocated_ms` / `unallocated_ms` 合计。入点不早于出点的
+块返回 400 并指出块号。
+
+```bash
+curl -s -X POST http://localhost:8000/api/readload \
+  -H 'Content-Type: application/json' \
+  -d '{"srt":"1\n00:00:01,000 --> 00:00:03,000\n你好，世界！\n",
+       "speed":15}'
+```
+
 快速验证：
 
 ```bash
@@ -621,7 +684,7 @@ curl -s -X POST http://localhost:8000/api/align \
 ```
 .
 ├── app/
-│   ├── main.py        # FastAPI：/api/align、/api/export.csv、/api/retime(.srt)、/api/relayout(.srt)、/api/avoid(.srt)、/api/split(.zh/.en.srt)、/api/termcheck(.csv)、/api/diff(.csv)、/api/rebuild(.srt)、静态页托管
+│   ├── main.py        # FastAPI：/api/align、/api/export.csv、/api/retime(.srt)、/api/relayout(.srt)、/api/avoid(.srt)、/api/split(.zh/.en.srt)、/api/termcheck(.csv)、/api/diff(.csv)、/api/rebuild(.srt)、/api/readload(.csv)、静态页托管
 │   ├── alignment.py   # 全局单调对齐 DP（numpy 实现 + 纯 Python 回退）
 │   ├── parsers.py     # 逐行对白稿与 SRT 解析（保留时间码与正文行）
 │   ├── retime.py      # SRT 时间轴重定时：校准点分段线性映射与导出校验
@@ -630,10 +693,11 @@ curl -s -X POST http://localhost:8000/api/align \
 │   ├── split.py       # 双语 SRT 拆轨：错配计分、全段最小总代价 DP（平局逐块中文在上）、单轨 SRT 导出
 │   ├── termcheck.py   # 双语术语核对：词表解析、英文轨拼接、词边界匹配、重叠消解与中文核对
 │   ├── rebuild.py     # 剪辑字幕重建：素材区间裁切平移、覆盖计数去重、端点切分/同集合合并、SRT 导出
+│   ├── readload.py    # 字幕阅读负载审查：显示宽度计量、所需时长向上取整、单时间轴最早出点优先模拟分配
 │   ├── diffalign.py   # SRT 版本差异：1:1/1:2/2:1/缺项全局最小代价 DP（字典序键：总分→入出点偏差→拆并次数）
 │   └── textnorm.py    # 归一化与归一化字符编辑距离
 ├── static/
-│   ├── index.html     # 页面结构（对齐 / 重定时 / 断行排版 / 时间避让 / 双语拆轨 / 术语核对 / 版本差异 / 剪辑重建八个选项卡）
+│   ├── index.html     # 页面结构（对齐 / 重定时 / 断行排版 / 时间避让 / 双语拆轨 / 术语核对 / 版本差异 / 剪辑重建 / 阅读负载审查九个选项卡）
 │   ├── style.css
 │   ├── app.js         # 对齐页面前端交互（fetch 调接口、渲染、下载）
 │   ├── retime.js      # 重定时页面前端交互（含各页签切换）
@@ -642,7 +706,8 @@ curl -s -X POST http://localhost:8000/api/align \
 │   ├── split.js       # 双语拆轨页面前端交互
 │   ├── termcheck.js   # 双语术语核对页面前端交互
 │   ├── diff.js        # 版本差异审校页面前端交互
-│   └── rebuild.js     # 剪辑字幕重建页面前端交互
+│   ├── rebuild.js     # 剪辑字幕重建页面前端交互
+│   └── readload.js    # 字幕阅读负载审查页面前端交互
 ├── tests/             # 单元 + 接口测试
 ├── requirements.txt
 ├── Dockerfile

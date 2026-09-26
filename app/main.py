@@ -15,6 +15,7 @@ from .alignment import GAP_COST, align, align_with_anchors, normalize_anchors
 from .avoid import avoid_subtitles, build_avoid_srt
 from .diffalign import diff_align, time_dev_ms
 from .parsers import parse_script, parse_srt
+from .readload import MAX_SPEED, MIN_SPEED, audit_reading_load
 from .rebuild import build_rebuild_srt, rebuild_subtitles, validate_clips
 from .relayout import build_relayout_srt, relayout_subtitles
 from .retime import CalibPoint, build_srt, parse_timecode, retime_subtitles
@@ -33,6 +34,8 @@ MIN_SHIFT_MS = 0          # 时间避让单块最大平移量下限（毫秒）
 MAX_SHIFT_MS = 3_600_000  # 时间避让单块最大平移量上限（毫秒）
 MAX_CLIPS = 2000          # 剪辑字幕重建素材片段数上限
 MAX_TERMS = 2000          # 双语术语核对词表条目数上限
+MIN_READ_SPEED = MIN_SPEED   # 阅读负载审查阅读速度下限（显示宽度单位/秒）
+MAX_READ_SPEED = MAX_SPEED   # 阅读负载审查阅读速度上限（显示宽度单位/秒）
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
@@ -847,6 +850,111 @@ def api_rebuild_srt(req: RebuildRequest):
         media_type="text/plain; charset=utf-8",
         headers={
             "Content-Disposition": 'attachment; filename="rebuilt.srt"'
+        },
+    )
+
+
+class ReadloadRequest(BaseModel):
+    srt: str = Field(default="", description="原 SRT 字幕")
+    speed: int = Field(
+        default=15,
+        ge=MIN_READ_SPEED,
+        le=MAX_READ_SPEED,
+        description="阅读速度（每秒可读的显示宽度单位数，4~30 的整数）",
+    )
+
+
+def _build_readload_rows(srt_text: str, speed: int):
+    if not MIN_READ_SPEED <= speed <= MAX_READ_SPEED:
+        raise HTTPException(
+            400,
+            f"阅读速度须为 {MIN_READ_SPEED}~{MAX_READ_SPEED} 之间的整数",
+        )
+    if len(srt_text.encode("utf-8", errors="ignore")) > MAX_RAW_BYTES:
+        raise HTTPException(400, "SRT 超过 2 MB 大小限制")
+    try:
+        subs = parse_srt(srt_text)
+    except ValueError as exc:
+        raise HTTPException(400, f"SRT 解析失败：{exc}") from exc
+    if not subs:
+        raise HTTPException(400, "SRT 内容为空，请粘贴字幕")
+    if len(subs) > MAX_ITEMS:
+        raise HTTPException(
+            400, f"字幕块数超过 {MAX_ITEMS} 的上限，请拆分后再审查"
+        )
+    try:
+        return audit_reading_load(subs, speed)
+    except ValueError as exc:
+        raise HTTPException(400, f"阅读负载审查失败：{exc}") from exc
+
+
+def _readload_row_json(r) -> dict:
+    return {
+        "block_pos": r.block_pos,
+        "index": r.index,
+        "start_tc": r.start_tc,
+        "end_tc": r.end_tc,
+        "text": r.text,
+        "width": r.width,
+        "required_ms": r.required_ms,
+        "allocated_ms": r.allocated_ms,
+        "unallocated_ms": r.unallocated_ms,
+        "status": r.status,
+    }
+
+
+@app.post("/api/readload")
+def api_readload(req: ReadloadRequest):
+    rows = _build_readload_rows(req.srt, req.speed)
+    ok = sum(1 for r in rows if r.status == "ok")
+    return {
+        "summary": {
+            "total": len(rows),
+            "speed": req.speed,
+            "ok": ok,
+            "overdue": len(rows) - ok,
+            "required_ms": sum(r.required_ms for r in rows),
+            "allocated_ms": sum(r.allocated_ms for r in rows),
+            "unallocated_ms": sum(r.unallocated_ms for r in rows),
+        },
+        "rows": [_readload_row_json(r) for r in rows],
+    }
+
+
+@app.post("/api/readload.csv")
+def api_readload_csv(req: ReadloadRequest):
+    rows = _build_readload_rows(req.srt, req.speed)
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(
+        [
+            "状态", "块号", "声明序号", "时间码入点", "时间码出点",
+            "显示宽度", "所需毫秒", "已分配毫秒", "未分配毫秒", "正文",
+        ]
+    )
+    status_label = {"ok": "合格", "overdue": "逾期"}
+    for r in rows:
+        writer.writerow(
+            [
+                status_label[r.status],
+                r.block_pos,
+                r.index,
+                r.start_tc,
+                r.end_tc,
+                r.width,
+                r.required_ms,
+                r.allocated_ms,
+                r.unallocated_ms,
+                r.text,
+            ]
+        )
+    # UTF-8 BOM，保证 Excel 直接打开中文不乱码
+    data = "﻿".encode("utf-8") + buf.getvalue().encode("utf-8")
+    return Response(
+        content=data,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="readload.csv"'
         },
     )
 
