@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>字幕校稿对齐</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>字幕校稿对齐</h1>
+  <p class="subtitle">逐行对白稿 × SRT 全局单调对齐 · SRT 时间轴重定时（校准点分段线性映射）· SRT 断行排版（宽度约束下枚举最优断点）· SRT 时间避让（重叠/过近字幕整体平移修整）· 双语 SRT 拆轨（每块两行拆分为中文轨/英文轨）· 双语术语核对（英文轨词边界找术语、中文轨核对指定译法）· SRT 版本差异审校（新旧两版按块序最小代价对齐）· 剪辑字幕重建（按素材剪辑区间裁切平移、乱序重叠去重合并）</p>
+</header>
+
+<main>
+  <nav class="tabs">
+    <button type="button" id="tabAlign" class="tab active" data-tab="align">字幕校稿对齐</button>
+    <button type="button" id="tabRetime" class="tab" data-tab="retime">SRT 时间轴重定时</button>
+    <button type="button" id="tabRelayout" class="tab" data-tab="relayout">SRT 断行排版</button>
+    <button type="button" id="tabAvoid" class="tab" data-tab="avoid">SRT 时间避让</button>
+    <button type="button" id="tabSplit" class="tab" data-tab="split">双语 SRT 拆轨</button>
+    <button type="button" id="tabTermcheck" class="tab" data-tab="termcheck">双语术语核对</button>
+    <button type="button" id="tabDiff" class="tab" data-tab="diff">SRT 版本差异审校</button>
+    <button type="button" id="tabRebuild" class="tab" data-tab="rebuild">剪辑字幕重建</button>
+  </nav>
+
+  <div id="viewAlign">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="script">逐行对白稿（每行一句）</label>
+        <button type="button" class="ghost" id="sampleScript">填入示例</button>
+      </div>
+      <textarea id="script" spellcheck="false"
+        placeholder="粘贴逐行对白稿，每行一条&#10;例如：&#10;你好世界&#10;今天天气真好"></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <label for="srt">SRT 字幕（保留时间码）</label>
+        <button type="button" class="ghost" id="sampleSrt">填入示例</button>
+      </div>
+      <textarea id="srt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;你好，世界！"></textarea>
+    </div>
+  </section>
+
+  <section class="controls">
+    <label class="gap-field">跳过单条代价
+      <input type="number" id="gapCost" value="0.45" min="0" max="1" step="0.01">
+    </label>
+    <label class="anchor-field">人工锚点
+      <input type="text" id="anchors" spellcheck="false"
+        placeholder="行:块，如 3:3, 10:8（可空）">
+    </label>
+    <button type="button" id="alignBtn" class="primary">开始对齐</button>
+    <button type="button" id="clearBtn" class="ghost">清空</button>
+    <span id="status" class="status" role="status"></span>
+  </section>
+
+  <section id="summary" class="summary hidden">
+    <span class="chip chip-match">对位 <b id="cntMatch">0</b></span>
+    <span class="chip chip-missing-script">缺对白稿 <b id="cntMissingScript">0</b></span>
+    <span class="chip chip-missing-srt">缺字幕 <b id="cntMissingSrt">0</b></span>
+    <span class="chip chip-anchor hidden" id="chipAnchor">锚点 <b id="cntAnchor">0</b></span>
+    <span class="chip">总行数 <b id="cntTotal">0</b></span>
+    <span class="chip">总代价 <b id="totalCost">0</b></span>
+    <span class="chip">对位平均代价 <b id="avgCost">-</b></span>
+    <button type="button" id="downloadBtn" class="ghost">下载 CSV</button>
+  </section>
+
+  <section id="resultWrap" class="result-wrap hidden">
+    <table id="resultTable">
+      <thead>
+        <tr>
+          <th class="col-status">状态</th>
+          <th class="col-cost">代价</th>
+          <th class="col-script">#</th>
+          <th class="col-script-text">对白稿</th>
+          <th class="col-srt">#</th>
+          <th class="col-tc">时间码</th>
+          <th class="col-srt-text">SRT 字幕</th>
+        </tr>
+      </thead>
+      <tbody id="resultBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewAlign -->
+
+  <div id="viewRetime" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="rtSrt">原 SRT 字幕</label>
+        <button type="button" class="ghost" id="rtSample">填入示例</button>
+      </div>
+      <textarea id="rtSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:02,500&#10;你好，世界！"></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <label for="rtPoints">校准点（每行一个：原时间 --&gt; 目标时间，两列均须严格递增）</label>
+      </div>
+      <textarea id="rtPoints" spellcheck="false"
+        placeholder="00:00:01,000 --> 00:00:02,000&#10;00:00:07,000 --> 00:00:10,500"></textarea>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button type="button" id="rtRunBtn" class="primary">开始重定时</button>
+    <button type="button" id="rtClearBtn" class="ghost">清空</button>
+    <span id="rtStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="rtSummary" class="summary hidden">
+    <span class="chip chip-match">字幕块 <b id="rtCnt">0</b></span>
+    <span class="chip">校准点 <b id="rtPts">0</b></span>
+    <button type="button" id="rtDownloadBtn" class="ghost">下载 SRT</button>
+  </section>
+
+  <section id="rtResultWrap" class="result-wrap hidden">
+    <table id="rtTable">
+      <thead>
+        <tr>
+          <th class="col-rt-idx">新#</th>
+          <th class="col-rt-idx">原#</th>
+          <th class="col-tc">原时间码</th>
+          <th class="col-tc">新时间码</th>
+          <th>字幕文本</th>
+        </tr>
+      </thead>
+      <tbody id="rtBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewRetime -->
+
+  <div id="viewRelayout" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="rlSrt">SRT 字幕（保留时间码，仅调整正文换行）</label>
+        <button type="button" class="ghost" id="rlSample">填入示例</button>
+      </div>
+      <textarea id="rlSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;你好，世界！"></textarea>
+    </div>
+    <div class="pane pane-help">
+      <div class="pane-head"><label>排版规则</label></div>
+      <ul class="rules">
+        <li>每个字幕块正文排成<b>最多两行</b>，一行放得下则保持一行。</li>
+        <li>每行最大显示宽度 <b>12～60</b>；东亚宽字符计 2，其余字符计 1，组合字符计 0 且不与前字拆开。</li>
+        <li>连续拉丁字母构成的单词不可拆分；空白处与词组之间为合法断点。</li>
+        <li>枚举全部合法断点，按<b>句末标点优先、两行宽度均衡</b>选优，不做固定字数贪心截断。</li>
+        <li>无合法两行排法的块<b>保留原正文</b>并标记「需人工处理」。</li>
+        <li>下载 SRT 时<b>原序号、时间码与文字内容不变</b>，仅换行位置可能变化。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="controls">
+    <label class="gap-field">每行最大显示宽度
+      <input type="number" id="rlWidth" value="30" min="12" max="60" step="1">
+    </label>
+    <button type="button" id="rlRunBtn" class="primary">开始排版</button>
+    <button type="button" id="rlClearBtn" class="ghost">清空</button>
+    <span id="rlStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="rlSummary" class="summary hidden">
+    <span class="chip chip-match">单行 <b id="rlCntSingle">0</b></span>
+    <span class="chip chip-wrapped">两行 <b id="rlCntWrapped">0</b></span>
+    <span class="chip chip-manual">需人工处理 <b id="rlCntManual">0</b></span>
+    <span class="chip">字幕块 <b id="rlCnt">0</b></span>
+    <span class="chip">每行宽度上限 <b id="rlMaxWidth">30</b></span>
+    <button type="button" id="rlDownloadBtn" class="ghost">下载 SRT</button>
+  </section>
+
+  <section id="rlResultWrap" class="result-wrap hidden">
+    <table id="rlTable">
+      <thead>
+        <tr>
+          <th class="col-rl-status">状态</th>
+          <th class="col-rt-idx">#</th>
+          <th class="col-tc">时间码</th>
+          <th class="col-rl-text">原文</th>
+          <th class="col-rl-text">排版结果</th>
+        </tr>
+      </thead>
+      <tbody id="rlBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewRelayout -->
+
+  <div id="viewAvoid" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="avSrt">SRT 字幕（重叠或间隔过短的相邻块将被整体平移修整）</label>
+        <button type="button" class="ghost" id="avSample">填入示例</button>
+      </div>
+      <textarea id="avSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;你好，世界！"></textarea>
+    </div>
+    <div class="pane pane-help">
+      <div class="pane-head"><label>避让规则</label></div>
+      <ul class="rules">
+        <li>每块<b>时长、顺序与正文不变</b>，仅整体平移入点/出点；新入点不为负。</li>
+        <li>修整后相邻块间隔（上块出点 → 下块入点）不小于<b>最小块间隔</b>。</li>
+        <li>每块平移量绝对值不超过<b>单块最大平移量</b>。</li>
+        <li>全段整体求解（非逐块贪心）：先让<b>最大平移量最小</b>，平移量相同时再让各块<b>按原入点就近</b>落位。</li>
+        <li>约束无法满足时指出<b>首个冲突块</b>并禁止导出。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="controls">
+    <label class="gap-field">最小块间隔（毫秒）
+      <input type="number" id="avGap" value="0" min="0" max="60000" step="10">
+    </label>
+    <label class="gap-field">单块最大平移量（毫秒）
+      <input type="number" id="avShift" value="2000" min="0" max="3600000" step="100">
+    </label>
+    <button type="button" id="avRunBtn" class="primary">开始避让</button>
+    <button type="button" id="avClearBtn" class="ghost">清空</button>
+    <span id="avStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="avSummary" class="summary hidden">
+    <span class="chip chip-match">字幕块 <b id="avCnt">0</b></span>
+    <span class="chip chip-shifted">已平移 <b id="avMoved">0</b></span>
+    <span class="chip">最大平移 <b id="avMaxShift">0</b> ms</span>
+    <span class="chip">最小块间隔 <b id="avGapShown">0</b> ms</span>
+    <span class="chip">平移上限 <b id="avLimit">0</b> ms</span>
+    <button type="button" id="avDownloadBtn" class="ghost">下载 SRT</button>
+  </section>
+
+  <section id="avResultWrap" class="result-wrap hidden">
+    <table id="avTable">
+      <thead>
+        <tr>
+          <th class="col-rt-idx">新#</th>
+          <th class="col-rt-idx">原#</th>
+          <th class="col-tc">原时间码</th>
+          <th class="col-tc">新时间码</th>
+          <th class="col-av-shift">平移量</th>
+          <th>字幕文本</th>
+        </tr>
+      </thead>
+      <tbody id="avBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewAvoid -->
+
+  <div id="viewSplit" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="spSrt">双语 SRT 字幕（每块正文须恰好两行：一行中文、一行英文）</label>
+        <button type="button" class="ghost" id="spSample">填入示例</button>
+      </div>
+      <textarea id="spSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;你好，世界！&#10;Hello, world!"></textarea>
+    </div>
+    <div class="pane pane-help">
+      <div class="pane-head"><label>拆轨规则</label></div>
+      <ul class="rules">
+        <li>每块正文<b>恰好两行</b>：一行归入中文轨，另一行归入英文轨；行数不符的块会<b>指出块号并拒绝导出</b>。</li>
+        <li><b>汉字落在英文轨</b>、<b>拉丁字母落在中文轨</b>，每个字符各计 1 分错配；数字、标点等中性字符不计分。</li>
+        <li>相邻两块的中英行<b>上下顺序变化另计 2 分</b>。</li>
+        <li>每块归属由<b>全段总代价最小</b>的动态规划确定（非逐块贪心）；总代价相同时从第 1 块起逐块优先<b>中文在上</b>，使纯数字/标点行依邻块保持轨序稳定。</li>
+        <li>两轨 SRT 分别下载：<b>保留原时间码与正文行内容</b>，序号从 1 重新编号。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button type="button" id="spRunBtn" class="primary">开始拆轨</button>
+    <button type="button" id="spClearBtn" class="ghost">清空</button>
+    <span id="spStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="spSummary" class="summary hidden">
+    <span class="chip chip-match">字幕块 <b id="spCnt">0</b></span>
+    <span class="chip chip-manual">错配字符 <b id="spMismatch">0</b></span>
+    <span class="chip chip-shifted">顺序变化 <b id="spSwitches">0</b> 次</span>
+    <span class="chip">总错配分 <b id="spTotal">0</b></span>
+    <span class="dl-btns">
+      <button type="button" id="spDownloadZhBtn" class="ghost">下载中文轨 SRT</button>
+      <button type="button" id="spDownloadEnBtn" class="ghost">下载英文轨 SRT</button>
+    </span>
+  </section>
+
+  <section id="spResultWrap" class="result-wrap hidden">
+    <table id="spTable">
+      <thead>
+        <tr>
+          <th class="col-rt-idx">新#</th>
+          <th class="col-rt-idx">原#</th>
+          <th class="col-tc">时间码</th>
+          <th class="col-sp-order">轨序</th>
+          <th class="col-sp-line">中文轨</th>
+          <th class="col-sp-line">英文轨</th>
+          <th class="col-sp-mismatch">错配</th>
+        </tr>
+      </thead>
+      <tbody id="spBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewSplit -->
+
+  <div id="viewTermcheck" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="tcSrt">双语 SRT 字幕（每块正文须恰好两行：一行中文、一行英文）</label>
+        <button type="button" class="ghost" id="tcSampleSrt">填入示例</button>
+      </div>
+      <textarea id="tcSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;机器学习正在改变世界。&#10;Machine learning is changing the world."></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <label for="tcGlossary">术语词表（每行：英文术语 + TAB + 指定中文译法）</label>
+        <button type="button" class="ghost" id="tcSampleGlossary">填入示例</button>
+      </div>
+      <textarea id="tcGlossary" spellcheck="false"
+        placeholder="machine learning&#9;机器学习&#10;neural network&#9;神经网络"></textarea>
+    </div>
+  </section>
+
+  <section class="input-grid" style="margin-top:16px;">
+    <div class="pane pane-help">
+      <div class="pane-head"><label>核对规则</label></div>
+      <ul class="rules">
+        <li>复用双语拆轨：每块正文<b>恰好两行</b>，分出中文轨与英文轨；行数不符的块会<b>指出块号</b>并拒绝核对。</li>
+        <li>英文轨仅跨<b>相邻且间隔 0～500 毫秒</b>的块拼接（块间补一个空格），在拼接段内查找术语，不跨段匹配。</li>
+        <li>查找前对英文做归一化：<b>大小写折叠、全角转半角、连续空白折叠为单个空格</b>；按<b>英文词边界</b>匹配（命中两侧不允许是英文字母或数字）。</li>
+        <li>重叠候选<b>先选覆盖字符最多者</b>，再按出现位置、词表顺序；<b>同一英文字符只归属一次</b>。</li>
+        <li>命中覆盖的每个块：该块<b>中文轨去空白后包含指定译法</b>（同样去空白）即<b>合格</b>，否则标为<b>缺译</b>，给出块号、英文原文与应译词。</li>
+        <li>词表空项（缺 TAB、英文术语或译法为空）与<b>重复英文术语</b>（归一化后相同）会<b>指出行号</b>；任何错误都会清空旧结果。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button type="button" id="tcRunBtn" class="primary">开始核对</button>
+    <button type="button" id="tcClearBtn" class="ghost">清空</button>
+    <span id="tcStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="tcSummary" class="summary hidden">
+    <span class="chip chip-ok">合格 <b id="tcCntOk">0</b></span>
+    <span class="chip chip-missing">缺译 <b id="tcCntMissing">0</b></span>
+    <span class="chip">命中 <b id="tcCntHits">0</b> 处</span>
+    <span class="chip">字幕块 <b id="tcCntBlocks">0</b></span>
+    <span class="chip">拼接段 <b id="tcCntChains">0</b></span>
+    <span class="chip">词表术语 <b id="tcCntTerms">0</b></span>
+    <button type="button" id="tcDownloadBtn" class="ghost">下载 CSV</button>
+  </section>
+
+  <section id="tcResultWrap" class="result-wrap hidden">
+    <table id="tcTable">
+      <thead>
+        <tr>
+          <th class="col-tk-status">状态</th>
+          <th class="col-rt-idx">块号</th>
+          <th class="col-rt-idx">原#</th>
+          <th class="col-tc">时间码</th>
+          <th class="col-tk-text">英文轨</th>
+          <th class="col-tk-text">中文轨</th>
+          <th class="col-tk-term">英文术语</th>
+          <th class="col-tk-term">应译词</th>
+        </tr>
+      </thead>
+      <tbody id="tcBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewTermcheck -->
+
+  <div id="viewDiff" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="dfOld">旧版 SRT</label>
+        <button type="button" class="ghost" id="dfSampleOld">填入示例</button>
+      </div>
+      <textarea id="dfOld" spellcheck="false"
+        placeholder="粘贴旧版标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:02,500&#10;你好，世界！"></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <label for="dfNew">新版 SRT</label>
+        <button type="button" class="ghost" id="dfSampleNew">填入示例</button>
+      </div>
+      <textarea id="dfNew" spellcheck="false"
+        placeholder="粘贴新版标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:02,500&#10;你好，世界！"></textarea>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button type="button" id="dfRunBtn" class="primary">开始比较</button>
+    <button type="button" id="dfClearBtn" class="ghost">清空</button>
+    <span id="dfStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="dfSummary" class="summary hidden">
+    <span class="chip chip-match">未变 <b id="dfCntUnchanged">0</b></span>
+    <span class="chip chip-time-only">仅改时 <b id="dfCntTimeOnly">0</b></span>
+    <span class="chip chip-text-changed">文字改动 <b id="dfCntTextChanged">0</b></span>
+    <span class="chip chip-split">拆分 <b id="dfCntSplit">0</b></span>
+    <span class="chip chip-merge">合并 <b id="dfCntMerge">0</b></span>
+    <span class="chip chip-added">新增 <b id="dfCntAdded">0</b></span>
+    <span class="chip chip-deleted">删除 <b id="dfCntDeleted">0</b></span>
+    <span class="chip">总行数 <b id="dfCntTotal">0</b></span>
+    <span class="chip">总代价 <b id="dfTotalCost">0</b></span>
+    <button type="button" id="dfDownloadBtn" class="ghost">下载 CSV</button>
+  </section>
+
+  <section id="dfResultWrap" class="result-wrap hidden">
+    <table id="dfTable">
+      <thead>
+        <tr>
+          <th class="col-df-status">状态</th>
+          <th class="col-cost">代价</th>
+          <th class="col-df-idx">旧#</th>
+          <th class="col-tc">旧时间码</th>
+          <th class="col-df-text">旧版正文</th>
+          <th class="col-df-idx">新#</th>
+          <th class="col-tc">新时间码</th>
+          <th class="col-df-text">新版正文</th>
+          <th class="col-df-dev">偏差(ms)</th>
+        </tr>
+      </thead>
+      <tbody id="dfBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewDiff -->
+
+  <div id="viewRebuild" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="rbSrt">原 SRT 字幕（与其它工具同一解析器）</label>
+        <button type="button" class="ghost" id="rbSampleSrt">填入示例</button>
+      </div>
+      <textarea id="rbSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;你好，世界！"></textarea>
+    </div>
+    <div class="pane">
+      <div class="pane-head">
+        <label for="rbClips">剪辑数组（JSON；时间均为非负整数毫秒）</label>
+        <button type="button" class="ghost" id="rbSampleClips">填入示例</button>
+      </div>
+      <textarea id="rbClips" spellcheck="false"
+        placeholder='[&#10;  {"source_in": 1000, "source_out": 3000, "target_in": 0},&#10;  {"source_in": 5000, "source_out": 9000, "target_in": 4000}&#10;]'></textarea>
+    </div>
+  </section>
+
+  <section class="input-grid" style="margin-top:16px;">
+    <div class="pane pane-help">
+      <div class="pane-head"><label>重建规则</label></div>
+      <ul class="rules">
+        <li>每段剪辑含 <b>source_in / source_out / target_in</b>（非负整数毫秒），<b>出点须大于入点</b>；片段可<b>乱序、重复</b>，输出区间可<b>重叠</b>，映射保持<b>原速</b>（目标 = target_in + 素材内偏移）。</li>
+        <li>每个字幕块与每段素材区间按<b>左闭右开</b>求交：空交集丢弃，非空交集<b>裁切后整体平移</b>到目标位置。</li>
+        <li>按映射后的<b>全部端点</b>切分时间轴；每段内当前有效的原字幕块按<b>解析序位</b>排列，保留各块正文换行，块与块之间再以换行连接。</li>
+        <li>同一原块被多段剪辑覆盖时<b>只显示一次</b>，直到<b>最后一份覆盖结束</b>才移除（覆盖区间重叠/相接处不重复）。</li>
+        <li>仅合并<b>相邻且有效原块集合相同</b>的区间；<b>无字幕区间跳过</b>（也不会跨空隙合并）。</li>
+        <li>导出按时间<b>从 1 编号、互不重叠</b>的 SRT；<b>非法剪辑清单指出项号</b>并禁止预览/导出。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="controls">
+    <button type="button" id="rbRunBtn" class="primary">开始重建</button>
+    <button type="button" id="rbClearBtn" class="ghost">清空</button>
+    <span id="rbStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="rbSummary" class="summary hidden">
+    <span class="chip chip-match">导出字幕 <b id="rbCnt">0</b></span>
+    <span class="chip">剪辑片段 <b id="rbClipsCnt">0</b></span>
+    <span class="chip chip-anchor">涉及原块 <b id="rbBlocks">0</b></span>
+    <button type="button" id="rbDownloadBtn" class="ghost">下载 SRT</button>
+  </section>
+
+  <section id="rbResultWrap" class="result-wrap hidden">
+    <table id="rbTable">
+      <thead>
+        <tr>
+          <th class="col-rt-idx">新#</th>
+          <th class="col-tc">重建后时间码</th>
+          <th class="col-rb-idx">原块序位</th>
+          <th class="col-rb-text">正文（保留换行）</th>
+        </tr>
+      </thead>
+      <tbody id="rbBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewRebuild -->
+</main>
+
+<script src="/static/app.js"></script>
+<script src="/static/retime.js"></script>
+<script src="/static/relayout.js"></script>
+<script src="/static/avoid.js"></script>
+<script src="/static/split.js"></script>
+<script src="/static/termcheck.js"></script>
+<script src="/static/diff.js"></script>
+<script src="/static/rebuild.js"></script>
+</body>
+</html>
