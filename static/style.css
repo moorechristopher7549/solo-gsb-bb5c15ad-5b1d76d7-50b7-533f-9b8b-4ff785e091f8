@@ -354,6 +354,17 @@ tr.row-deleted td:first-child { border-left: 4px solid var(--deleted-border); }
   text-align: center;
 }
 
+/* 字幕阅读负载审查 */
+.chip-overdue { background: var(--manual-bg); border-color: var(--manual-border); }
+.col-rd-status { width: 76px; }
+.col-rd-num { width: 92px; text-align: right; }
+.col-rd-text { min-width: 200px; }
+.badge-overdue { background: var(--manual-border); color: #fff; }
+td.cell-unalloc { white-space: nowrap; }
+td.unalloc-bad { color: #c5221f; font-weight: 600; }
+tr.row-overdue { background: var(--manual-bg); }
+tr.row-overdue td:first-child { border-left: 4px solid var(--manual-border); }
+
 @media (max-width: 860px) {
   .input-grid { grid-template-columns: 1fr; }
   textarea { min-height: 160px; }

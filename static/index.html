@@ -9,7 +9,7 @@
 <body>
 <header class="topbar">
   <h1>字幕校稿对齐</h1>
-  <p class="subtitle">逐行对白稿 × SRT 全局单调对齐 · SRT 时间轴重定时（校准点分段线性映射）· SRT 断行排版（宽度约束下枚举最优断点）· SRT 时间避让（重叠/过近字幕整体平移修整）· 双语 SRT 拆轨（每块两行拆分为中文轨/英文轨）· 双语术语核对（英文轨词边界找术语、中文轨核对指定译法）· SRT 版本差异审校（新旧两版按块序最小代价对齐）· 剪辑字幕重建（按素材剪辑区间裁切平移、乱序重叠去重合并）</p>
+  <p class="subtitle">逐行对白稿 × SRT 全局单调对齐 · SRT 时间轴重定时（校准点分段线性映射）· SRT 断行排版（宽度约束下枚举最优断点）· SRT 时间避让（重叠/过近字幕整体平移修整）· 双语 SRT 拆轨（每块两行拆分为中文轨/英文轨）· 双语术语核对（英文轨词边界找术语、中文轨核对指定译法）· SRT 版本差异审校（新旧两版按块序最小代价对齐）· 剪辑字幕重建（按素材剪辑区间裁切平移、乱序重叠去重合并）· 字幕阅读负载审查（最早出点优先的单通道阅读时间分配，标出读不完的逾期块）</p>
 </header>
 
 <main>
@@ -22,6 +22,7 @@
     <button type="button" id="tabTermcheck" class="tab" data-tab="termcheck">双语术语核对</button>
     <button type="button" id="tabDiff" class="tab" data-tab="diff">SRT 版本差异审校</button>
     <button type="button" id="tabRebuild" class="tab" data-tab="rebuild">剪辑字幕重建</button>
+    <button type="button" id="tabReading" class="tab" data-tab="reading">字幕阅读负载审查</button>
   </nav>
 
   <div id="viewAlign">
@@ -496,6 +497,69 @@
     </table>
   </section>
   </div><!-- /viewRebuild -->
+
+  <div id="viewReading" class="hidden">
+  <section class="input-grid">
+    <div class="pane">
+      <div class="pane-head">
+        <label for="rdSrt">SRT 字幕（沿用同一 SRT 解析器，保留时间码）</label>
+        <button type="button" class="ghost" id="rdSample">填入示例</button>
+      </div>
+      <textarea id="rdSrt" spellcheck="false"
+        placeholder="粘贴标准 SRT&#10;1&#10;00:00:01,000 --> 00:00:03,000&#10;你好，世界！"></textarea>
+    </div>
+    <div class="pane pane-help">
+      <div class="pane-head"><label>审查规则</label></div>
+      <ul class="rules">
+        <li>输入整数<b>阅读速度</b>（每秒 <b>4～30</b> 个显示宽度单位，默认 10）。</li>
+        <li>正文<b>去掉空白</b>后按显示宽度计量：<b>东亚宽字符计 2、其余字符计 1</b>；每块所需阅读毫秒数 = 宽度单位 ÷ 速度 ×1000，<b>向上取整</b>。</li>
+        <li>阅读只允许发生在块自身 <b>[入点, 出点)</b> 区间内；所有块放在<b>同一阅读时间轴</b>上，<b>同一时刻只读一块</b>。</li>
+        <li>按<b>最早出点优先</b>分配，同出点按<b>解析序位</b>；某块<b>入点、出点或当前块读完</b>时立即重新挑选（出点更早的后入块可抢占）。</li>
+        <li>块到出点仍未读完即标为<b>逾期</b>，记录<b>未分配毫秒数</b>（所需 − 已分配）；结果按时间预览，可下载 UTF-8 CSV。</li>
+        <li><b>入点不早于出点</b>的块会<b>指出块号</b>并拒绝预览/导出，同时清空旧结果。</li>
+      </ul>
+    </div>
+  </section>
+
+  <section class="controls">
+    <label class="gap-field">阅读速度（宽度单位/秒）
+      <input type="number" id="rdSpeed" value="10" min="4" max="30" step="1">
+    </label>
+    <button type="button" id="rdRunBtn" class="primary">开始审查</button>
+    <button type="button" id="rdClearBtn" class="ghost">清空</button>
+    <span id="rdStatus" class="status" role="status"></span>
+  </section>
+
+  <section id="rdSummary" class="summary hidden">
+    <span class="chip chip-ok">合格 <b id="rdCntOk">0</b></span>
+    <span class="chip chip-overdue">逾期 <b id="rdCntOverdue">0</b></span>
+    <span class="chip">字幕块 <b id="rdCnt">0</b></span>
+    <span class="chip">阅读速度 <b id="rdSpeedShown">10</b> 单位/秒</span>
+    <span class="chip">所需合计 <b id="rdRequired">0</b> ms</span>
+    <span class="chip">已分配合计 <b id="rdAllocated">0</b> ms</span>
+    <span class="chip chip-overdue">未分配合计 <b id="rdUnallocated">0</b> ms</span>
+    <button type="button" id="rdDownloadBtn" class="ghost">下载 CSV</button>
+  </section>
+
+  <section id="rdResultWrap" class="result-wrap hidden">
+    <table id="rdTable">
+      <thead>
+        <tr>
+          <th class="col-rd-status">状态</th>
+          <th class="col-rt-idx">块号</th>
+          <th class="col-rt-idx">原#</th>
+          <th class="col-tc">时间码</th>
+          <th class="col-rd-num">宽度</th>
+          <th class="col-rd-num">所需(ms)</th>
+          <th class="col-rd-num">已分配(ms)</th>
+          <th class="col-rd-num">未分配(ms)</th>
+          <th class="col-rd-text">正文</th>
+        </tr>
+      </thead>
+      <tbody id="rdBody"></tbody>
+    </table>
+  </section>
+  </div><!-- /viewReading -->
 </main>
 
 <script src="/static/app.js"></script>
@@ -506,5 +570,6 @@
 <script src="/static/termcheck.js"></script>
 <script src="/static/diff.js"></script>
 <script src="/static/rebuild.js"></script>
+<script src="/static/reading.js"></script>
 </body>
 </html>
